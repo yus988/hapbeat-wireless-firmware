@@ -2,10 +2,10 @@
 #include "adjustParams.h"  // グローバル adjustParams（共通定義）
 #include "ui_defs.hpp"  // このタスク専用UI定義
 
-enum class DeafMode : uint8_t { PlayAll = 0, NoScrape, VenueOnly, ArenaOnly, Test };
+enum class DeafMode : uint8_t { PlayAll = 0, NoScrape, ImpactOnly, VenueOnly, ArenaOnly, Test };
 
 static DeafMode _mode = DeafMode::PlayAll;
-static DeafMode _prevModeBeforeTest = DeafMode::PlayAll;  // テスト前のモードを記憶
+[[maybe_unused]] static DeafMode _prevModeBeforeTest = DeafMode::PlayAll;  // テスト前のモードを記憶
 static uint32_t _lastUserOpMs = 0;
 static uint8_t _testSelId = 0;  // 0..5（電源ON中は保持）
 static unsigned long _buzzerStopTime = 0;  // ブザー自動停止用タイマー
@@ -56,6 +56,11 @@ static void showModeTitle() {
       displayManager::printEfont(&_display, MENU_NOSCRAPE_JA, centerX + 8, 0);  // 8 + (112-96)/2 = 16
       displayManager::printEfont(&_display, MENU_NOSCRAPE_EN, centerX + 8, 16);
       break;
+    case DeafMode::ImpactOnly:
+      // "軽打・重打のみ" = 7文字 × 16px = 112px
+      displayManager::printEfont(&_display, MENU_IMPACTONLY_JA, centerX, 0);
+      displayManager::printEfont(&_display, MENU_IMPACTONLY_EN, centerX, 16);
+      break;
     case DeafMode::VenueOnly:
       displayManager::printEfont(&_display, MENU_VENUE_JA, 0, 0);
       displayManager::printEfont(&_display, MENU_VENUE_EN, 0, 16);
@@ -97,6 +102,10 @@ static void applyLimitIds() {
       break;
     case DeafMode::NoScrape:
       audioManager::setLimitIds(MODE_NO_SCRAPE_IDS, MODE_NO_SCRAPE_IDS_SIZE);
+      audioManager::setIsLimitEnable(true);
+      break;
+    case DeafMode::ImpactOnly:
+      audioManager::setLimitIds(MODE_IMPACT_ONLY_IDS, MODE_IMPACT_ONLY_IDS_SIZE);
       audioManager::setIsLimitEnable(true);
       break;
     case DeafMode::VenueOnly:
@@ -209,11 +218,8 @@ void TaskNeckESPNOW() {
             showModeTitle(); 
           }
           else if (i == LOGICAL_BTN_IDX_CENTER) { 
-            // テストモードに入る前に現在のモードを記憶
-            _prevModeBeforeTest = _mode;
-            _mode = DeafMode::Test; 
-            // _testSelId は保持（電源ON中は記憶）
-            applyLimitIds();  // テストモード用のID制限解除を適用
+            _mode = DeafMode::ImpactOnly; 
+            applyLimitIds(); 
             showModeTitle(); 
           }
           else if (i == LOGICAL_BTN_IDX_BOTTOM_LEFT) { 
