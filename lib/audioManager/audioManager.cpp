@@ -357,6 +357,14 @@ void PlaySndOnDataRecv(const uint8_t *mac_addr, const uint8_t *data,
   unsigned long recvStartTime = micros();
   unsigned long currentTime = millis();
 
+#if defined(ESPNOW_REPEATER_ONLY)
+  if (data_len <= 2 || data[2] != 50) {
+    DEBUG_PRINTLN("Skipped packet: not from repeater (devicePos != 50)");
+    return;
+  }
+  uint8_t repeaterDevicePos = data[2];
+#endif
+
   // 送信機・中継機からの重複メッセージチェック（data[2]以外が同じ場合）
   if (currentTime - _lastDuplicateCheckTime < _duplicateIgnoreDuration &&
       isSameDataExceptPos2(data, _lastDuplicateData, data_len)) {
@@ -411,9 +419,11 @@ void PlaySndOnDataRecv(const uint8_t *mac_addr, const uint8_t *data,
   // data[0]とファイルのカテゴリは必ず合わないといけない。
   // カテゴリに限らず通すなら isEventModeで通す（audioManager.h）
   // 後日 adjustParams.h に移すこと（set isEventModeを実装する）
+  bool devicePosMatches = (data[2] == _devicePos || data[2] == 99 || data[2] == 50);
+
   if ((data[0] == _settings.categoryNum || isEventMode) &&
       (data[1] == _settings.channelId || data[1] == 99) &&
-      (data[2] == _devicePos || data[2] == 99)) {
+      devicePosMatches) {
     if (playCmd == 2) {
       for (int iStub = 2; iStub <= 3; ++iStub) {
         while (_wav_gen[iStub]->isRunning()) {

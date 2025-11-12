@@ -11,8 +11,17 @@ import time
 # TARGET_ENV = os.getenv('PIOENV', 'BandWL_V3_GEN_ESPNOW')
 # TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3_DEMO_ESPNOW')
 
-# TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3_NECKDEAFLYMPICESPNOW')
-TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V2_NECKDEAFLYMPICESPNOW')
+TARGET_ENV = os.getenv("PIOENV", "DuoWL_V3_NECKDEAFLYMPICESPNOW")
+# TARGET_ENV = os.getenv("PIOENV", "DuoWL_V2_NECKDEAFLYMPICESPNOW")
+
+# === Upload mode switch ===
+# 下の２行のうち、必要な方のコメントを外してください。
+PROGRAM_ONLY = False  # True: プログラムのみ書き換え（音声データ保持）
+# PROGRAM_ONLY = True
+
+# 除外したいポートデバイスを指定（例: ["COM3", "COM5"]）
+# EXCLUDED_PORTS = []
+EXCLUDED_PORTS = ["COM7", "COM35"]
 
 
 # TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3_GEN_ESPNOW')
@@ -25,10 +34,16 @@ def find_esp32_ports():
     esp32_ports = []
 
     for port in ports:
-        if "USB" in port.description or "CP210" in port.description or "CH910" in port.description:
+        if port.device in EXCLUDED_PORTS:
+            continue
+        if "USB" in port.description:
             esp32_ports.append(port.device)
-    
+        # 以下の条件を有効化すると CP210/CH910 系USBシリアルも対象に含められます。
+        # elif "CP210" in port.description or "CH910" in port.description:
+        #     esp32_ports.append(port.device)
+
     return esp32_ports
+
 
 # 各デバイスにプログラムとファイルシステムを順次アップロードする関数
 def upload_program_and_fs():
@@ -41,22 +56,51 @@ def upload_program_and_fs():
     print(f"{len(devices)}台のESP32デバイスが見つかりました。")
 
     for device in devices:
-        print(f"\n{device} に {TARGET_ENV} 環境でファームウェアとファイルシステムをアップロードします...")
+        print(
+            f"\n{device} に {TARGET_ENV} 環境でアップロードを開始します... (mode: {'program-only' if PROGRAM_ONLY else 'full'})"
+        )
 
-        # 0️⃣ フラッシュの消去
-        try:
-            print(f"{device} のフラッシュを消去しています...")
-            result_erase = subprocess.run(["pio", "run", "-e", TARGET_ENV, "-t", "erase", "--upload-port", device], check=True)
-            print(f"{device} のフラッシュ消去が完了しました。")
-        except subprocess.CalledProcessError:
-            print(f"{device} のフラッシュ消去に失敗しました。")
-            continue  # 消去が失敗した場合、次のデバイスへ
+        if not PROGRAM_ONLY:
+            # 0️⃣ フラッシュの消去
+            try:
+                print(f"{device} のフラッシュを消去しています...")
+                subprocess.run(
+                    [
+                        "pio",
+                        "run",
+                        "-e",
+                        TARGET_ENV,
+                        "-t",
+                        "erase",
+                        "--upload-port",
+                        device,
+                    ],
+                    check=True,
+                )
+                print(f"{device} のフラッシュ消去が完了しました。")
+            except subprocess.CalledProcessError:
+                print(f"{device} のフラッシュ消去に失敗しました。")
+                continue  # 消去が失敗した場合、次のデバイスへ
 
-        time.sleep(2)  # デバイスのリセット待ち
+            time.sleep(2)  # デバイスのリセット待ち
+        else:
+            print("フラッシュ消去をスキップします（program-only モード）。")
 
         # 1️⃣ ファームウェア（プログラム）のアップロード
         try:
-            result_fw = subprocess.run(["pio", "run", "-e", TARGET_ENV, "-t", "upload", "--upload-port", device], check=True)
+            subprocess.run(
+                [
+                    "pio",
+                    "run",
+                    "-e",
+                    TARGET_ENV,
+                    "-t",
+                    "upload",
+                    "--upload-port",
+                    device,
+                ],
+                check=True,
+            )
             print(f"{device} へのファームウェアアップロードが完了しました。")
         except subprocess.CalledProcessError:
             print(f"{device} へのファームウェアアップロードに失敗しました。")
@@ -64,14 +108,32 @@ def upload_program_and_fs():
 
         time.sleep(2)  # デバイスのリセット待ち
 
-        # 2️⃣ ファイルシステム（LittleFS/SPIFFS）のアップロード
-        try:
-            result_fs = subprocess.run(["pio", "run", "-e", TARGET_ENV, "-t", "uploadfs", "--upload-port", device], check=True)
-            print(f"{device} へのファイルシステムアップロードが完了しました。")
-        except subprocess.CalledProcessError:
-            print(f"{device} へのファイルシステムアップロードに失敗しました。")
+        if not PROGRAM_ONLY:
+            # 2️⃣ ファイルシステム（LittleFS/SPIFFS）のアップロード
+            try:
+                subprocess.run(
+                    [
+                        "pio",
+                        "run",
+                        "-e",
+                        TARGET_ENV,
+                        "-t",
+                        "uploadfs",
+                        "--upload-port",
+                        device,
+                    ],
+                    check=True,
+                )
+                print(f"{device} へのファイルシステムアップロードが完了しました。")
+            except subprocess.CalledProcessError:
+                print(f"{device} へのファイルシステムアップロードに失敗しました。")
+        else:
+            print(
+                "ファイルシステムアップロードをスキップします（program-only モード）。"
+            )
 
         time.sleep(2)  # 次のデバイスへの切り替え待機
+
 
 if __name__ == "__main__":
     upload_program_and_fs()

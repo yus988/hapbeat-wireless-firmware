@@ -15,6 +15,8 @@ static bool _buzzerPlaying = false;  // ブザー再生中フラグ
 static bool _isLowBattery = false;  // 低バッテリー状態フラグ
 static bool _wasLowBattery = false;  // 前回の低バッテリー状態
 static unsigned long _lastBatteryCheck = 0;  // 最後のバッテリーチェック時刻
+static bool _batteryWarmupDone = false;  // 起動直後の誤判定防止フラグ
+static uint8_t _batteryWarmupRetry = 0;  // SoC再取得のリトライ回数管理
 
 // 拍手（ID=3）のランダム再生用
 static bool _clapPlaying = false;  // 拍手再生中フラグ
@@ -202,6 +204,8 @@ void TaskNeckESPNOW() {
           continue;
         }
         
+        audioManager::stopAudio();
+
         _lastUserOpMs = millis();
         uint8_t category_ID = audioManager::getCategoryID();
         uint8_t channel_ID = audioManager::getChannelID();
@@ -372,9 +376,17 @@ void TaskNeckESPNOW() {
       newBlinkOne = dbgLowBattery;
 #else
       socPct = lipo.soc();
-      if (socPct == 0) { 
-        delay(20); 
-        socPct = lipo.soc(); 
+      if (!_batteryWarmupDone) {
+        if (socPct == 0 && _batteryWarmupRetry < 5) {
+          _batteryWarmupRetry++;
+          delay(20);
+          socPct = lipo.soc();
+        } else {
+          _batteryWarmupDone = (socPct > 0) || (_batteryWarmupRetry >= 5);
+        }
+        if (!_batteryWarmupDone) {
+          continue;  // SoCが安定するまで低バッテリー処理を行わない
+        }
       }
       newBlinkOne = (socPct < 3);
 #endif
