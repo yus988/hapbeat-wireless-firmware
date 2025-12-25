@@ -25,6 +25,10 @@ void setup() {
   // init I2S DAC
   pinMode(EN_I2S_DAC_PIN, OUTPUT);
   digitalWrite(EN_I2S_DAC_PIN, HIGH);
+  
+  // I2C初期化（全バージョン共通、OLED初期化より前に実行）
+  Wire.begin(SDA_PIN, SCL_PIN);
+
   // init _display
   pinMode(EN_OLED_PIN, OUTPUT);
   digitalWrite(EN_OLED_PIN, HIGH);
@@ -39,7 +43,13 @@ void setup() {
   // D級アンプの初期設定＆ゲイン決定
   pinMode(EN_MOTOR_PIN, OUTPUT);
   digitalWrite(EN_MOTOR_PIN, HIGH);
+#if defined(BAND_V4)
+  // V4: MAX17048バッテリーアラートピン設定
+  pinMode(BAT_ALRT_PIN, INPUT);
+#else
+  // V4以外: BQ27220用のピン設定
   pinMode(BQ27x_PIN, INPUT);
+#endif
   audioManager::setDevicePos(DEVICE_POS);
 
 #if defined(NECKLACE_V2) || defined(NECKLACE_V3)
@@ -49,7 +59,7 @@ void setup() {
   pinMode(AIN_VIBVOL_PIN, INPUT);
 #endif
 
-#if defined(BAND_V3)
+#if defined(BAND_V3) || defined(BAND_V4)
   // CATEGORY_ID_TXT_SIZEをセット
   audioManager::setCategorySize(CATEGORY_ID_TXT_SIZE);
   // ボリュームレベル配列を初期化
@@ -57,17 +67,17 @@ void setup() {
   audioManager::loadVolumeLevels(volumeLevels, CATEGORY_ID_TXT_SIZE);
 #endif
 
-  // I2C関連 init
-  // SDA_PIN と SCL_PIN を明示する。
-  Wire.begin(SDA_PIN, SCL_PIN);  // Initialize I2C master
-#if defined(BAND_V3)
+  // I2Cデバイス初期化
+#if defined(BAND_V4)
+  // Band_V4: MAX17048 初期化
+  MAX17048_Cmd::setupMAX17048(SDA_PIN, SCL_PIN);
+#elif defined(BAND_V3)
   // Band_V3: BQ27220 初期化（容量設定は行わない）
   BQ27220_Cmd::setupBQ27220(SDA_PIN, SCL_PIN, 0);
 #endif
 #ifdef EN_MCP4018
-  // 以下の begin の中に Wire.begin() があるが、引数が無いので SDA_PIN と
-  // SDA_PIN を明示できない。事前に Wire.begin(SDA_PIN, SDA_PIN) が必要
-  _digipot.begin();  // Initialize Digipot library.
+  // Wire.begin()は上で実行済み
+  _digipot.begin();
   _digipot.setWiperPercent(0);
 #endif
   USBSerial.println("I2C connected");

@@ -18,8 +18,14 @@ CRGB _leds[1];
 CRGB _currentColor;
 const int SCREEN_WIDTH = 128;  // OLED _display width, in pixels
 const int SCREEN_HEIGHT = 32;  // OLED _display height, in pixels
+#if defined(BAND_V4)
+// V4: I2C接続のSSD1306
+Adafruit_SSD1306 _display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET_PIN);
+#else
+// V3以前: SPI接続のSSD1306
 Adafruit_SSD1306 _display(SCREEN_WIDTH, SCREEN_HEIGHT, MOSI_PIN, SCLK_PIN,
                           OLED_DC_PIN, OLED_RESET_PIN, CS_PIN);
+#endif
 
 //////////////////////////// general functions
 ////////////////////////////////////////
@@ -98,10 +104,10 @@ uint8_t _ampVolStep;
 MCP4018_SOLDERED _digipot;  // オブジェクトの定義
 #endif
 
-#if defined(BAND_V3)
+#if defined(BAND_V3) || defined(BAND_V4)
 int _SW_PIN[] = {SW0_PIN, SW1_PIN, SW2_PIN};
 bool _isBtnPressed[] = {false, false, false};
-#elif defined(BAND_V2) || defined(BAND_V3)
+#elif defined(BAND_V2)
 // see pam8003 datasheet p.7
 int _SW_PIN[] = {SW0_PIN, SW1_PIN};
 bool _isBtnPressed[] = {false, false};

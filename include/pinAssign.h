@@ -52,7 +52,7 @@
   // analog amp
   #define EN_VIBAMP_PIN 26
   #define AOUT_VIBVOL_PIN 18
-  // _display pins
+  // _display pins (SPI)
   #define SCLK_PIN 45
   #define MOSI_PIN 46
   //   #define MISO_PIN 37
@@ -66,10 +66,37 @@
   #define SW2_PIN 12
   // LED
   #define LED_PIN 34
-  // current sensing
+  // current sensing (BQ27220)
   #define BQ27x_PIN 37
   #define SDA_PIN 35
   #define SCL_PIN 36
+#endif
+
+#if defined(BAND_V4)
+  // Audio pins
+  #define BCLK_PIN 39
+  #define LRCK_PIN 38
+  #define DOUT_PIN 40
+  #define I2S_MLCK_PIN 48
+  #define EN_I2S_DAC_PIN 33
+  #define EN_MOTOR_PIN 47
+  // analog amp
+  #define EN_VIBAMP_PIN 26
+  #define AOUT_VIBVOL_PIN 18
+  // _display pins (I2C SSD1306)
+  #define OLED_RESET_PIN 43
+  #define EN_OLED_PIN 2
+  // Button pins
+  #define SW0_PIN 14
+  #define SW1_PIN 13
+  #define SW2_PIN 12
+  // LED
+  #define LED_PIN 34
+  // I2C (ディスプレイ & MAX17048共用)
+  #define SDA_PIN 35
+  #define SCL_PIN 36
+  // MAX17048 バッテリーアラート
+  #define BAT_ALRT_PIN 37
 #endif
 
 #endif

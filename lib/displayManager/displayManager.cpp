@@ -44,10 +44,19 @@ void setTitle(const char **category, int m_size, const char **channel,
 void initOLED(Adafruit_SSD1306 *display, int rot, const int textsize,
               const int playPos[2], const int channelPos[2],
               const int gainPos[2]) {
-  if (!(*display).begin(SSD1306_SWITCHCAPVCC)) {
-    USBSerial.println(F("SSD1306 allocation failed"));
+#ifdef OLED_I2C
+  // I2C接続の場合（V4など）: アドレス0x3Cを指定
+  if (!(*display).begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    USBSerial.println(F("SSD1306 I2C allocation failed"));
     for (;;);  // Don't proceed, loop forever
   }
+#else
+  // SPI接続の場合（V3以前）
+  if (!(*display).begin(SSD1306_SWITCHCAPVCC)) {
+    USBSerial.println(F("SSD1306 SPI allocation failed"));
+    for (;;);  // Don't proceed, loop forever
+  }
+#endif
   (*display).clearDisplay();
   (*display).setRotation(rot);
   (*display).display();

@@ -7,7 +7,11 @@
 #include <FastLED.h>
 #include <Wire.h>
 // 自作ライブラリ
+#if defined(BAND_V4)
+#include <MAX17048.h>
+#else
 #include <BQ27220.h>
+#endif
 #include <audioManager.h>
 #include <displayManager.h>
 
@@ -75,10 +79,10 @@ extern int _currAIN;
 extern uint8_t _ampVolStep;
 #endif
 
-#if defined(BAND_V3)
+#if defined(BAND_V3) || defined(BAND_V4)
 extern int _SW_PIN[3];
 extern bool _isBtnPressed[3];
-#elif defined(BAND_V2) || defined(BAND_V3)
+#elif defined(BAND_V2)
 extern int _SW_PIN[2];
 extern bool _isBtnPressed[2];
 #endif
