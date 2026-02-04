@@ -221,44 +221,106 @@ python upload_all.py
   - デバイスが見つからない: ドライバ（CP210/CH910）導入、Device Manager で COM ポート確認、BOOT モード確認
   - `serial` モジュールが無い: `pip install pyserial`
   - `pio` が見つからない: PlatformIO CLI をインストールし PATH を設定
+ 
+## 振動音声（wav）ファイルの仕様と配置
 
-## 振動用音声データの差し替え
+### 1. 手順（差し替え〜反映）
 
-[`data/`]フォルダ内の wav データを差し替えてください。ファイル名規則は次項を確認してください。
+1) `data/` フォルダ内の `.wav` を差し替えます（ファイル名規則は後述）。  
+2) 差し替え後は、Quick Start の手順どおり **PlatformIO → Upload Filesystem Image（ファイルシステムイメージをアップロード）** を実行し、毎回アップロードし直してください。
 
-- 差し替えたら Quick Start にあるよう、platformIO -> upload file image で逐一アップロードし直してください。
-- 拡張子は wav のみの対応となります。
-- wav 形式は 符号付き 16bit（必須） / サンプルレート 16 kHz がおすすめです。
-  - 8 kHz だと明確に遅延が大きくなるので注意。恐らく esp 側で最適化されていない。
-- 極力ファイルサイズを小さくするようにしてください。
-  - 可能であればモノラル・1 ファイルにつき数百ミリ秒が目安です。
+---
 
-### ファイル名規則
+### 2. 音声ファイル仕様（フォーマット推奨）
 
-ファイル名はハイフン区切りで以下の様な構成になっています。  
-**category - soundID_subID - audioChannel - saveDistination - name**
+- 対応拡張子：**.wav のみ**
+- 必須：**符号付き PCM 16bit**
+- 推奨：**サンプルレート 16 kHz**
+  - 8 kHz でも動作する場合はありますが、遅延が増えたり不安定になる場合があります。必ず実機で動作確認してください。
+- 特に `RAM` 保存の音声はサイズを小さくしてください  
+  - 推奨：**モノラル**、かつ **1ファイル 数KB 程度**
 
-- category: 再生するカテゴリを指定
-- soundID: 音声データの種類
-  - subID: 同じ soundID の差分データ。歩行音などの繰り返し再生する音声データにランダム性を付与したい場合に活用推奨
-- audioChannel: C / L / R から指定。基本 C で、DuoWL で左右の振動強度を別々にしたい場合のみ L/R を指定。
-  - C の場合はモノラル音源、L / R の場合は片方のチャンネルをミュートにしたステレオ音源を用意すること。
-- saveDistination: RAM / FS からデータの保存先を指定。
-  - RAM: 内部 RAM に保存。応答性を重視するファイルは RAM を選択すること。ただしサイズ制限が厳しいため１ファイル 100KB 以下、RAM 全体で 500KB 以内が目安。
-  - FS: ファイルストレージに保存。RAM に比べサイズに余裕があるが、呼び出しに時間が掛かる（数百ミリ秒程度）ため、ループ音源などリアルタイ性が求められないもの推奨。FS 全体で 2MB 以内が目安。
-- name: 人間が読む用の名前。プログラム上では無視される。
+参考：16kHz / 16bit / mono の PCM wav は **約32KB/秒**（= 16,000 × 1 × 2 bytes）
 
-例：0-0_1-C-RAM-gunshot.wav というファイルに対して、読み込まれるパラメータ
+---
 
+### 3. ファイル名規則（メタデータの埋め込み）
+
+ファイル名はハイフン区切りで以下の構成です。  
+**category - soundID_subID - audioChannel - saveDistination - name.wav**
+
+- `category`：再生カテゴリ
+- `soundID`：音声データの種類（ID）
+- `subID`：同一 `soundID` の差分（ランダム再生でバリエーションを付けたい場合に使用）
+- `audioChannel`：`C` / `L` / `R`
+  - 通常は `C`
+  - DuoWL で左右の振動強度を別々にしたい場合のみ `L` / `R`
+  - `C` はモノラル音源
+  - `L` / `R` は **片チャンネルをミュートにしたステレオ音源**を用意してください
+- `saveDistination`：`RAM` / `FS`
+  - `RAM`：内部 RAM に保存（応答性重視、サイズ制限が厳しい）
+  - `FS`：LittleFS に保存（容量に余裕、ただし読み出しに時間が掛かるためリアルタイム性が低い用途向け）
+- `name`：人間が読む用（プログラム上は無視）
+
+例：`0-0_1-C-RAM-gunshot.wav`  
 - category = 0
 - sound_id = 0
 - sub_id = 1
 - audio_channel = C
 - data_storage = RAM
 
-### 最大データ数・音声処理の設定
+---
 
-各タスクの [`audioManagerSettings.hpp`](src/public_tasks) を編集してください（タスクごとに上書き可、未定義時は `lib/audioManager/audioManagerSettings_default.hpp` が使用されます）。
+### 4. データ容量の目安（RAM/FS はビルド結果と実装で変わります）
+
+【サンプルコードの場合の目安：RAM 音声合計 150KB 以下 / FS 音声合計 1MB 以下】
+
+音声データの上限は固定値ではなく、**プログラム本体のサイズ**と、実行時に確保される **ヒープ / スタック / バッファ** 等との兼ね合いで決まります。  
+そのため、特に `RAM` 保存は、環境ごとにビルドログを見て上限を決めてください。
+
+- `RAM`
+  - 応答性重視向け。**搭載 RAM から「ビルド時 RAM 使用量」と「実行時に必要な余白」を差し引いた範囲**に収める必要があります。
+- `FS`
+  - `/data` に入れられる総量は **LittleFS のパーティションサイズ**で決まります。
+  - プログラムが大きいほど FS が自動で減るわけではありませんが、パーティション設計（アプリ領域と FS 領域の配分）次第で上限が変わります。
+
+ハードウェア情報（DuoWL / BandWL 共通）
+- MCU：ESP32-S3（240MHz）
+- RAM：320KB
+- Flash：8MB
+
+#### 具体例：DuoWL_V3_GEN_ESPNOW の場合（2026-02-04 時点のビルドログ）
+
+- RAM: 14.9%（48,768 bytes / 327,680 bytes）
+- Flash(アプリ領域): 46.0%（1,538,405 bytes / 3,342,336 bytes）
+
+ビルド時点の未使用領域（単純差分）：
+- RAM：327,680 - 48,768 = **278,912 bytes（約272 KB）**
+- Flash：3,342,336 - 1,538,405 = **1,803,931 bytes（約1.8 MB）**
+
+ただし、実行時にさらにメモリを消費するため、RAM の残り全量は音声に使えません。  
+目安としては、まず **RAM 音声合計 150KB 以下 / FS 音声合計 1MB 以下**から開始し、実機で安定動作する範囲に調整してください。
+
+---
+
+### 5. 最大データ数・音声処理の設定（インデックス上限）
+
+音声ファイルの「インデックス対象数」や「カテゴリ数」等は、各タスクの `audioManagerSettings.hpp` で設定します  
+（タスクごとに上書き可。未定義時は `lib/audioManager/audioManagerSettings_default.hpp` が使用されます）。
+
+
+```cpp
+#define CATEGORY_NUM   3
+
+// Max number of sound files to index and load metadata for (data/ files)
+#define SOUND_FILE_NUM 60
+
+// Max data entries per category (sound_id range per category)
+#define DATA_NUM       25
+
+// Max sub variations per data (sub_id range)
+#define SUB_DATA_NUM   6
+```
 
 ## 送受信データ形式説明
 
