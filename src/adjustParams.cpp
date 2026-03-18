@@ -10,6 +10,8 @@
   #include "sample_tasks/taskBandGenESPNOW/adjustParams.hpp"
 #elif defined(TASK_NECK_GEN_ESPNOW)
   #include "sample_tasks/taskNeckGenESPNOW/adjustParams.hpp"
+#elif defined(TASK_NECK_STREAM_ESPNOW)
+  #include "sample_tasks/taskStreamESPNOW/adjustParams.hpp"
 #elif __has_include("private_tasks/adjustParams.hpp")
   // sample 対象以外は private override を使用
   #include "private_tasks/adjustParams.hpp"

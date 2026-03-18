@@ -8,10 +8,13 @@ import time
 # VSCodeのUIで選択中の環境を取得（デフォルトは "DuoWL_V3-ESPNOW"）
 # TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3-ESPNOW_JUDO0806')
 # TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V2-ESPNOW_JUDO0806')
-# TARGET_ENV = os.getenv('PIOENV', 'BandWL_V3_GEN_ESPNOW')
-# TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3_DEMO_ESPNOW')
 
-TARGET_ENV = os.getenv("PIOENV", "DuoWL_V3_NECKDEAFLYMPICESPNOW")
+# TARGET_ENV = os.getenv('PIOENV', 'BandWL_V3_GEN_ESPNOW')
+# TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3_GEN_ESPNOW')
+
+TARGET_ENV = os.getenv('PIOENV', 'DuoWL_V3_DEMO_ESPNOW')
+
+# TARGET_ENV = os.getenv("PIOENV", "DuoWL_V3_NECKDEAFLYMPICESPNOW")
 # TARGET_ENV = os.getenv("PIOENV", "DuoWL_V2_NECKDEAFLYMPICESPNOW")
 
 # === Upload mode switch ===

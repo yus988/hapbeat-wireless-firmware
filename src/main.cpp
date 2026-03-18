@@ -2,12 +2,14 @@
 
 //////////////// general functions  /////////////////////////////
 
+#ifndef AUDIO_STREAM_MODE
 void TaskAudio(void *args) {
   while (1) {
     audioManager::playAudioInLoop();
     delay(5);
   }
 }
+#endif
 
 /////////////// execution ////////////////////////////////////
 void setup() {
@@ -81,10 +83,10 @@ void setup() {
   _digipot.setWiperPercent(0);
 #endif
   USBSerial.println("I2C connected");
-  // データ読み込み
+
+#ifndef AUDIO_STREAM_MODE
   audioManager::readAllSoundFiles();
   audioManager::initAudioOut(BCLK_PIN, LRCK_PIN, DOUT_PIN);
-  // 読み込む前に playSndOnRecv 入るとエラーになるので、読み込むための時間を確保
   delay(200);
 
   _isFixMode = audioManager::getIsFixMode();
@@ -95,10 +97,16 @@ void setup() {
   }
   _leds[0] = _currentColor;
   FastLED.show();
+#else
+  _leds[0] = CRGB(0, 10, 0);  // green = stream mode
+  FastLED.show();
+#endif
 
   TaskAppInit();
-  
+
+#ifndef AUDIO_STREAM_MODE
   xTaskCreatePinnedToCore(TaskAudio, "TaskAudio", 4096, NULL, 20, &thp[0], 1);
+#endif
   TaskAppStart();
 }
 void loop() {
