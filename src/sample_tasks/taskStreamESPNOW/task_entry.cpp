@@ -27,7 +27,9 @@ static void showStreamStats() {
     char line[32];
     snprintf(line, sizeof(line), "RX: %lu pkts", s.packetsReceived);
     displayManager::printEfont(&_display, line, 0, 0);
-    snprintf(line, sizeof(line), "buf:%lu", audioStreamReceiver::getBufferLevel());
+    snprintf(line, sizeof(line), "buf:%lu dly:%lums",
+             audioStreamReceiver::getBufferLevel(),
+             audioStreamReceiver::getEstimatedDelayMs());
     displayManager::printEfont(&_display, line, 0, 16);
     if (s.packetsLost > 0 || s.bufferUnderruns > 0) {
       snprintf(line, sizeof(line), "L:%lu U:%lu", s.packetsLost, s.bufferUnderruns);
@@ -81,10 +83,10 @@ void TaskAppInit() {
 
 void TaskAppStart() {
   xTaskCreatePinnedToCore(audioStreamReceiver::i2sOutputTask, "I2SStream",
-                          4096, NULL, 20, &thp[0], 1);
-  xTaskCreatePinnedToCore(TaskUI_Run, "TaskUI", 4096, NULL, 23, &thp[1], 1);
-  xTaskCreatePinnedToCore(TaskStreamStats, "StreamStats", 2048, NULL, 5, NULL,
-                          1);
+                          4096, NULL, 23, &thp[0], 1);  // Core 1: I2S 出力専用
+  xTaskCreatePinnedToCore(TaskUI_Run, "TaskUI", 4096, NULL, 5, &thp[1], 0);  // Core 0: UI は I2S と競合させない
+  xTaskCreatePinnedToCore(TaskStreamStats, "StreamStats", 2048, NULL, 2, NULL,
+                          0);  // Core 0
 }
 
 void TaskAppLoop() {}

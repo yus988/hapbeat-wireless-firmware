@@ -34,6 +34,7 @@ void onStreamDataRecv(const uint8_t *mac_addr, const uint8_t *data,
 void i2sOutputTask(void *args);
 StreamStats getStreamStats();
 uint32_t getBufferLevel();
+uint32_t getEstimatedDelayMs();
 void printStats();
 
 }  // namespace audioStreamReceiver
