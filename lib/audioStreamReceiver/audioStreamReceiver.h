@@ -28,11 +28,19 @@ struct StreamStats {
   uint32_t bufferUnderruns;
 };
 
+struct LatencyStats {
+  uint32_t avgUs;
+  uint32_t minUs;
+  uint32_t maxUs;
+  uint32_t sampleCount;
+};
+
 void initI2SStream(int bclkPin, int lrckPin, int doutPin);
 void onStreamDataRecv(const uint8_t *mac_addr, const uint8_t *data,
                       int data_len);
 void i2sOutputTask(void *args);
 StreamStats getStreamStats();
+LatencyStats getLatencyStats();
 uint32_t getBufferLevel();
 uint32_t getEstimatedDelayMs();
 void printStats();

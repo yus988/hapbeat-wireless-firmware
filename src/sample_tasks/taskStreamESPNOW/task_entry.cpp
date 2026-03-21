@@ -17,15 +17,29 @@ static constexpr int VOL_UI_BAR_H = 12;
 static constexpr int VOL_UI_CHANGE_THRESHOLD = 2;
 static constexpr unsigned long VOL_UI_TIMEOUT_MS = 1500UL;
 
+static void showChannelUI(uint8_t ch) {
+  _display.clearDisplay();
+  _display.setFont();
+  _display.setTextSize(3);
+  _display.setTextColor(SSD1306_WHITE);
+  _display.setCursor(20, 8);
+  _display.printf("CH: %d", ch);
+  _display.display();
+}
+
 static void showStreamStats() {
   audioStreamReceiver::StreamStats s = audioStreamReceiver::getStreamStats();
   _display.clearDisplay();
+  // 常にチャンネルを右上に表示
+  char chStr[8];
+  snprintf(chStr, sizeof(chStr), "CH%d", espnowManager::getChannel());
   if (s.packetsReceived == 0) {
     displayManager::printEfont(&_display, "Stream: Ready", 0, 0);
     displayManager::printEfont(&_display, "Waiting sender...", 0, 16);
+    displayManager::printEfont(&_display, chStr, 90, 32);
   } else {
     char line[32];
-    snprintf(line, sizeof(line), "RX: %lu pkts", s.packetsReceived);
+    snprintf(line, sizeof(line), "RX:%lu %s", s.packetsReceived, chStr);
     displayManager::printEfont(&_display, line, 0, 0);
     snprintf(line, sizeof(line), "buf:%lu dly:%lums",
              audioStreamReceiver::getBufferLevel(),
@@ -65,7 +79,9 @@ static void TaskStreamStats(void *args) {
 
 void TaskAppInit() {
   _display.clearDisplay();
-  displayManager::printEfont(&_display, "Stream: Ready", 0, 0);
+  char chLine[24];
+  snprintf(chLine, sizeof(chLine), "Stream CH%d Ready", espnowManager::getChannel());
+  displayManager::printEfont(&_display, chLine, 0, 0);
   displayManager::printEfont(&_display, "Waiting sender...", 0, 16);
   _display.display();
 
@@ -98,11 +114,40 @@ void TaskUI_Run(void *args) {
   unsigned long volUiLastShown = 0;
   unsigned long lastStatsUpdate = 0;
 
+  // チャンネル切り替えボタン (SW0) — エッジ検出
+  bool lastChBtn = digitalRead(SW0_PIN);
+  bool chUiShown = false;
+  unsigned long chUiLastShown = 0;
+  static constexpr unsigned long CH_UI_TIMEOUT_MS = 2000UL;
+
   while (true) {
+    // --- チャンネルボタン (SW0) チェック ---
+    bool chBtn = digitalRead(SW0_PIN);
+    if (chBtn == LOW && lastChBtn == HIGH) {  // 押下エッジ
+      espnowManager::cycleChannel();
+      showChannelUI(espnowManager::getChannel());
+      chUiShown = true;
+      chUiLastShown = millis();
+    }
+    lastChBtn = chBtn;
+
+    // チャンネルUI タイムアウト → 通常画面に戻す
+    if (chUiShown && millis() - chUiLastShown > CH_UI_TIMEOUT_MS) {
+      chUiShown = false;
+      showStreamStats();
+      lastStatsUpdate = millis();
+    }
+
+    // チャンネルUI表示中は他のUI更新をスキップ
+    if (chUiShown) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+
+    // --- ボリューム処理 ---
     _currAIN = analogRead(AIN_VIBVOL_PIN);
     int newVolStep = map(_currAIN, 0, 4095, VOLUME_MAX, 0);
 
-    // しきい値を超えたらボリュームUI表示モードに入る
     if (!volUiShown) {
       int delta = abs(newVolStep - lastDisplayedVolStep);
       if (delta >= VOL_UI_CHANGE_THRESHOLD) {
@@ -110,7 +155,6 @@ void TaskUI_Run(void *args) {
       }
     }
 
-    // ボリュームUI表示中
     if (volUiShown && newVolStep != lastDisplayedVolStep) {
       _ampVolStep = newVolStep;
       lastDisplayedVolStep = newVolStep;
@@ -124,14 +168,12 @@ void TaskUI_Run(void *args) {
       }
     }
 
-    // 一定時間操作なしでストリーム情報表示に戻る
     if (volUiShown && millis() - volUiLastShown > VOL_UI_TIMEOUT_MS) {
       volUiShown = false;
       showStreamStats();
       lastStatsUpdate = millis();
     }
 
-    // ボリュームUI非表示時は定期的にストリーム情報を更新
     if (!volUiShown && millis() - lastStatsUpdate > 1000) {
       showStreamStats();
       lastStatsUpdate = millis();

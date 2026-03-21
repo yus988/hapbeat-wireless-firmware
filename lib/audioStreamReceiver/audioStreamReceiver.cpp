@@ -2,16 +2,55 @@
 #include "driver/i2s.h"
 #include <atomic>
 
+#ifdef STREAM_ADPCM
+#include "ima_adpcm.h"
+#endif
+
+// ---- Latency measurement GPIO ----
+// LATENCY_MEASURE_PIN をビルドフラグで定義するとパケット受信/I2S 出力タイミングを計測可能。
+// NECKLACE_V3: GPIO 12 が空き
+#ifdef LATENCY_MEASURE_PIN
+static bool latencyGpioInited = false;
+static inline void latencyGpioInit() {
+  if (!latencyGpioInited) {
+    pinMode(LATENCY_MEASURE_PIN, OUTPUT);
+    digitalWrite(LATENCY_MEASURE_PIN, LOW);
+    latencyGpioInited = true;
+  }
+}
+static inline void latencyGpioToggle() {
+  static bool state = false;
+  state = !state;
+  digitalWrite(LATENCY_MEASURE_PIN, state ? HIGH : LOW);
+}
+#else
+static inline void latencyGpioInit() {}
+static inline void latencyGpioToggle() {}
+#endif
+
 namespace audioStreamReceiver {
 
 // --- Ring buffer (lock-free SPSC, power-of-2 size) ---
 // 低遅延優先のため、保持量を必要最小限に抑える。
 static constexpr uint32_t RING_BUF_FRAMES = 256;
 static constexpr uint32_t RING_BUF_MASK = RING_BUF_FRAMES - 1;
-static StereoFrame ringBuf[RING_BUF_FRAMES];
+
+struct TimestampedFrame {
+  StereoFrame frame;
+  uint32_t recvTimestamp;  // micros() at packet reception
+};
+static TimestampedFrame ringBuf[RING_BUF_FRAMES];
+
 // SPSC 契約: writeIdx はライター(コールバック)のみ変更、readIdx はリーダー(I2Sタスク)のみ変更
 static std::atomic<uint32_t> writeIdx{0};
 static std::atomic<uint32_t> readIdx{0};
+
+// --- Serial latency measurement ---
+static uint32_t latencySum = 0;
+static uint32_t latencyCount = 0;
+static uint32_t latencyMin = UINT32_MAX;
+static uint32_t latencyMax = 0;
+static constexpr uint32_t LATENCY_REPORT_INTERVAL = 500;  // report every N batches
 
 // --- Stream state ---
 enum class StreamState : uint8_t { IDLE, BUFFERING, STREAMING };
@@ -28,6 +67,7 @@ static bool seqInitialized = false;
 
 // --- Statistics ---
 static StreamStats stats = {0, 0, 0, 0};
+static uint32_t piggybackRecovered = 0;  // piggyback で復元成功した回数
 
 // --- Upsample ---
 static uint32_t upsampleRatio = 1;
@@ -46,22 +86,24 @@ static inline bool ringFull() {
 }
 
 // ライター専用: writeIdx のみ変更。満杯時は新フレームを破棄。
-static void ringWrite(const StereoFrame &frame) {
+static void ringWrite(const StereoFrame &frame, uint32_t timestamp) {
   if (ringFull()) {
     stats.bufferOverruns++;
     return;  // 新フレームを破棄（readIdx は操作しない）
   }
   uint32_t w = writeIdx.load(std::memory_order_relaxed);
-  ringBuf[w & RING_BUF_MASK] = frame;
+  ringBuf[w & RING_BUF_MASK] = {frame, timestamp};
   writeIdx.store(w + 1, std::memory_order_release);
 }
 
-// リーダー専用: readIdx のみ変更。
-static bool ringRead(StereoFrame &frame) {
+// リーダー専用: readIdx のみ変更。timestamp にパケット受信時刻を返す。
+static bool ringRead(StereoFrame &frame, uint32_t &timestamp) {
   uint32_t r = readIdx.load(std::memory_order_relaxed);
   uint32_t w = writeIdx.load(std::memory_order_acquire);
   if (w == r) return false;
-  frame = ringBuf[r & RING_BUF_MASK];
+  const TimestampedFrame &tf = ringBuf[r & RING_BUF_MASK];
+  frame = tf.frame;
+  timestamp = tf.recvTimestamp;
   readIdx.store(r + 1, std::memory_order_release);
   return true;
 }
@@ -81,6 +123,7 @@ static void ringDrainExcess() {
 // ---- Public API ----
 
 void initI2SStream(int bclkPin, int lrckPin, int doutPin) {
+  latencyGpioInit();
   upsampleRatio = I2S_OUTPUT_RATE / STREAM_SAMPLE_RATE;
   if (upsampleRatio < 1) upsampleRatio = 1;
 
@@ -119,22 +162,92 @@ void onStreamDataRecv(const uint8_t *mac_addr, const uint8_t *data,
   uint8_t seqNum = data[1];
   uint16_t numFrames = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
 
-  uint32_t expectedLen = 4 + numFrames * sizeof(StereoFrame);
-  if ((uint32_t)data_len < expectedLen) return;
+#ifdef STREAM_ADPCM
+  uint32_t currentLen = ima_adpcm::ADPCM_HEADER_SIZE + numFrames;
+#else
+  uint32_t currentLen = 4 + numFrames * sizeof(StereoFrame);
+#endif
+  if ((uint32_t)data_len < currentLen) return;
 
   stats.packetsReceived++;
 
-  // Packet loss detection: fill zeros for missing packets
+  uint32_t recvTs = micros();
+
+#ifdef STREAM_ADPCM
+  // --- Piggyback recovery check ---
+  // パケットが currentLen より大きければ piggyback セクションが存在
+  uint32_t piggybackOffset = currentLen;
+  uint32_t piggybackTotalLen = ima_adpcm::PIGGYBACK_HEADER_SIZE + numFrames;
+  bool hasPiggyback = ((uint32_t)data_len >= piggybackOffset + piggybackTotalLen);
+
   if (seqInitialized) {
     uint8_t gap = seqNum - expectedSeqNum;
     if (gap > 0 && gap < 128) {
       stats.packetsLost += gap;
-      // 無線が乱れたときに古い無音を大量に積むと遅延が増えるため、補間量を制限。
+
+      // gap==1 かつ piggyback あり → 前パケットを復元
+      if (gap == 1 && hasPiggyback) {
+        uint8_t prevSeq;
+        ima_adpcm::State pbL, pbR;
+        ima_adpcm::readPiggybackHeader(&data[piggybackOffset], prevSeq, pbL, pbR);
+
+        // prevSeq が期待値と一致する場合のみ復元
+        if (prevSeq == expectedSeqNum) {
+          static StereoFrame pbDecodedBuf[240];
+          uint16_t pbN = numFrames > 240 ? 240 : numFrames;
+          const uint8_t *pbAdpcm = &data[piggybackOffset + ima_adpcm::PIGGYBACK_HEADER_SIZE];
+          ima_adpcm::decodeStereo(pbL, pbR, pbAdpcm, pbN,
+                                  reinterpret_cast<int16_t *>(pbDecodedBuf));
+          for (uint16_t i = 0; i < pbN; i++) {
+            ringWrite(pbDecodedBuf[i], recvTs);
+          }
+          piggybackRecovered++;
+          // ロス1パケット分を復元したのでギャップ消費済み（無音挿入不要）
+        } else {
+          // prevSeq 不一致 → 復元不可、無音で埋める
+          StereoFrame silence = {0, 0};
+          uint32_t lostFrames = numFrames;
+          if (lostFrames > PRE_BUFFER_FRAMES) lostFrames = PRE_BUFFER_FRAMES;
+          for (uint32_t i = 0; i < lostFrames && !ringFull(); i++) {
+            ringWrite(silence, 0);
+          }
+        }
+      } else {
+        // gap>=2 or no piggyback → 無音で埋める（piggyback は直前1パケのみ復元可能）
+        uint32_t lostFrames = gap * numFrames;
+        if (lostFrames > PRE_BUFFER_FRAMES) lostFrames = PRE_BUFFER_FRAMES;
+        StereoFrame silence = {0, 0};
+        for (uint32_t i = 0; i < lostFrames && !ringFull(); i++) {
+          ringWrite(silence, 0);
+        }
+      }
+    }
+  }
+  seqInitialized = true;
+  expectedSeqNum = seqNum + 1;
+
+  // 現在パケットの ADPCM デコード
+  ima_adpcm::State stL, stR;
+  ima_adpcm::readStateFromPacket(data, stL, stR);
+  static StereoFrame decodedBuf[240];
+  uint16_t n = numFrames > 240 ? 240 : numFrames;
+  ima_adpcm::decodeStereo(stL, stR,
+                          &data[ima_adpcm::ADPCM_HEADER_SIZE], n,
+                          reinterpret_cast<int16_t *>(decodedBuf));
+  for (uint16_t i = 0; i < n; i++) {
+    ringWrite(decodedBuf[i], recvTs);
+  }
+#else
+  // Non-ADPCM path (no piggyback support)
+  if (seqInitialized) {
+    uint8_t gap = seqNum - expectedSeqNum;
+    if (gap > 0 && gap < 128) {
+      stats.packetsLost += gap;
       uint32_t lostFrames = gap * numFrames;
       if (lostFrames > PRE_BUFFER_FRAMES) lostFrames = PRE_BUFFER_FRAMES;
       StereoFrame silence = {0, 0};
       for (uint32_t i = 0; i < lostFrames && !ringFull(); i++) {
-        ringWrite(silence);
+        ringWrite(silence, 0);
       }
     }
   }
@@ -144,8 +257,9 @@ void onStreamDataRecv(const uint8_t *mac_addr, const uint8_t *data,
   const StereoFrame *frames =
       reinterpret_cast<const StereoFrame *>(data + 4);
   for (uint16_t i = 0; i < numFrames; i++) {
-    ringWrite(frames[i]);
+    ringWrite(frames[i], recvTs);
   }
+#endif
 
   // バッファ超過制御はリーダー側 (i2sOutputTask) で実施 → SPSC 契約遵守
 
@@ -174,25 +288,50 @@ void i2sOutputTask(void *args) {
 
   USBSerial.println("[StreamRx] Streaming started");
 
+  uint32_t batchCounter = 0;
+
   while (true) {
     // バッファが MAX を超えていたら古いフレームをスキップして遅延固定化
     ringDrainExcess();
 
     uint32_t outIdx = 0;
+    uint32_t preWriteTs = micros();
 
     for (uint32_t i = 0; i < BATCH_SIZE; i++) {
       StereoFrame f;
-      if (!ringRead(f)) {
+      uint32_t recvTs = 0;
+      if (!ringRead(f, recvTs)) {
         f = silence;
         stats.bufferUnderruns++;
+      } else if (recvTs != 0) {
+        // 受信→I2S出力までの遅延を計測
+        uint32_t delta = preWriteTs - recvTs;
+        latencySum += delta;
+        latencyCount++;
+        if (delta < latencyMin) latencyMin = delta;
+        if (delta > latencyMax) latencyMax = delta;
       }
       for (uint32_t r = 0; r < upsampleRatio; r++) {
         outBuf[outIdx++] = f;
       }
     }
 
+    latencyGpioToggle();  // I2S 出力直前（オシロスコープ計測用）
     i2s_write(I2S_PORT, outBuf, outIdx * sizeof(StereoFrame),
               &bytesWritten, portMAX_DELAY);
+
+    // 定期的にシリアルへ遅延統計を出力
+    if (++batchCounter >= LATENCY_REPORT_INTERVAL && latencyCount > 0) {
+      uint32_t avgUs = latencySum / latencyCount;
+      USBSerial.printf(
+          "[Latency] avg=%uus min=%uus max=%uus (n=%u) buf=%u\n",
+          avgUs, latencyMin, latencyMax, latencyCount, ringAvailable());
+      latencySum = 0;
+      latencyCount = 0;
+      latencyMin = UINT32_MAX;
+      latencyMax = 0;
+      batchCounter = 0;
+    }
   }
 }
 
@@ -213,10 +352,27 @@ void printStats() {
   else if (state == StreamState::STREAMING) stateStr = "STREAMING";
   uint32_t delayMs = getEstimatedDelayMs();
   USBSerial.printf(
-      "[StreamRx] state=%s pkts=%u lost=%u overrun=%u underrun=%u buf=%u/%u "
-      "est=%ums\n",
-      stateStr, s.packetsReceived, s.packetsLost, s.bufferOverruns,
-      s.bufferUnderruns, ringAvailable(), RING_BUF_FRAMES, delayMs);
+      "[StreamRx] state=%s pkts=%u lost=%u recovered=%u overrun=%u underrun=%u "
+      "buf=%u/%u est=%ums\n",
+      stateStr, s.packetsReceived, s.packetsLost, piggybackRecovered,
+      s.bufferOverruns, s.bufferUnderruns, ringAvailable(), RING_BUF_FRAMES,
+      delayMs);
+}
+
+LatencyStats getLatencyStats() {
+  LatencyStats ls;
+  if (latencyCount > 0) {
+    ls.avgUs = latencySum / latencyCount;
+    ls.minUs = latencyMin;
+    ls.maxUs = latencyMax;
+    ls.sampleCount = latencyCount;
+  } else {
+    ls.avgUs = 0;
+    ls.minUs = 0;
+    ls.maxUs = 0;
+    ls.sampleCount = 0;
+  }
+  return ls;
 }
 
 }  // namespace audioStreamReceiver
